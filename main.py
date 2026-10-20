@@ -5,20 +5,30 @@ import threading
 import websocket
 from flask import Flask
 
-# Initialize a tiny web server to satisfy Render's Web Service requirements
 app = Flask(__name__)
 
 @app.route('/')
 def home():
     return "Discord 24/7 Status Bot is running cleanly!", 200
 
-# Read secure settings directly from Render Environment Variables
+# Fetch secure environment variables
 TOKEN = os.getenv("TOKEN")
 STATUS = os.getenv("STATUS", "online")
 CUSTOM_STATUS = os.getenv("CUSTOM_STATUS", "Hey!")
 
+def send_heartbeat(ws, interval):
+    print(f"[Discord] Heartbeat thread started. Interval: {interval}s")
+    while True:
+        time.sleep(interval)
+        try:
+            ws.send(json.dumps({"op": 1, "d": None}))
+            print("[Discord] Heartbeat sent successfully.")
+        except Exception as e:
+            print(f"[Discord] Heartbeat failed: {e}")
+            break
+
 def on_open(ws):
-    print("Connecting to Discord Gateway...")
+    print("[Discord] Web socket opened. Sending authentication...")
     auth_payload = {
         "op": 2,
         "d": {
@@ -41,28 +51,26 @@ def on_open(ws):
         }
     }
     ws.send(json.dumps(auth_payload))
-    print("Authentication payload sent to Discord Gateway.")
+    print(f"[Discord] Auth payload pushed. Setting status to '{STATUS}'.")
 
 def on_message(ws, message):
     data = json.loads(message)
+    # Opcode 10 is the Hello event containing the heartbeat requirement
     if data.get("op") == 10:
         heartbeat_interval = data["d"]["heartbeat_interval"] / 1000
-        print(f"Heartbeat established at {heartbeat_interval}s.")
-        while True:
-            time.sleep(heartbeat_interval)
-            try:
-                ws.send(json.dumps({"op": 1, "d": None}))
-            except Exception as e:
-                print(f"Failed to send heartbeat: {e}")
-                break
+        # Start heartbeat in a dedicated sub-thread to avoid blocking messages
+        t = threading.Thread(target=send_heartbeat, args=(ws, heartbeat_interval), daemon=True)
+        t.start()
+    elif data.get("t") == "READY":
+        print(f"[Discord] Successfully authenticated! Account is now ONLINE.")
 
 def on_error(ws, error):
-    print(f"Connection issue: {error}")
+    print(f"[Discord] Socket Error: {error}")
 
 def on_close(ws, close_status_code, close_msg):
-    print("Session disconnected. Reconnecting in 5 seconds...")
+    print(f"[Discord] Connection lost ({close_status_code}: {close_msg}). Reconnecting in 5s...")
     time.sleep(5)
-    run_gateway()
+    start_discord_connection()
 
 def run_gateway():
     ws = websocket.WebSocketApp(
@@ -74,16 +82,15 @@ def run_gateway():
     )
     ws.run_forever()
 
-def start_discord_thread():
+def start_discord_connection():
     if not TOKEN:
-        print("Error: TOKEN environment variable is missing on Render!")
+        print("[Discord] ERROR: The 'TOKEN' environment variable is missing on Render!")
         return
-    # Run the Discord websocket in a separate thread so it doesn't block Flask
     discord_thread = threading.Thread(target=run_gateway, daemon=True)
     discord_thread.start()
 
 if __name__ == "__main__":
-    start_discord_thread()
-    # Web services on Render bind to port 10000 by default
+    start_discord_connection()
+    # Bind to port provided by Render
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)

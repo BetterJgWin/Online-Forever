@@ -1,16 +1,21 @@
 import os
 import time
 import json
+import threading
 import websocket
+from flask import Flask
+
+# Initialize a tiny web server to satisfy Render's Web Service requirements
+app = Flask(__name__)
+
+@app.route('/')
+def home():
+    return "Discord 24/7 Status Bot is running cleanly!", 200
 
 # Read secure settings directly from Render Environment Variables
 TOKEN = os.getenv("TOKEN")
 STATUS = os.getenv("STATUS", "online")
 CUSTOM_STATUS = os.getenv("CUSTOM_STATUS", "Hey!")
-
-if not TOKEN:
-    print("Error: TOKEN environment variable is missing on Render!")
-    exit(1)
 
 def on_open(ws):
     print("Connecting to Discord Gateway...")
@@ -69,5 +74,16 @@ def run_gateway():
     )
     ws.run_forever()
 
+def start_discord_thread():
+    if not TOKEN:
+        print("Error: TOKEN environment variable is missing on Render!")
+        return
+    # Run the Discord websocket in a separate thread so it doesn't block Flask
+    discord_thread = threading.Thread(target=run_gateway, daemon=True)
+    discord_thread.start()
+
 if __name__ == "__main__":
-    run_gateway()
+    start_discord_thread()
+    # Web services on Render bind to port 10000 by default
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
